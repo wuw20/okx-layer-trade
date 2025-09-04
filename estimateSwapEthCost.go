@@ -14,8 +14,15 @@ import (
 // EstimateApproveEthCost 计算approve 手续费
 func EstimateApproveEthCost(client *ethclient.Client, from, token, spender common.Address, amount *big.Int) (uint64, *big.Int, *big.Float, error) {
 
-	erc20ABI, _ := abi.JSON(strings.NewReader(`[{"name":"approve","type":"function","inputs":[{"name":"spender","type":"address"},{"name":"amount","type":"uint256"}],"outputs":[{"type":"bool"}]}]`))
-	data, _ := erc20ABI.Pack("approve", spender, amount)
+	erc20ABI, err := abi.JSON(strings.NewReader(`[{"name":"approve","type":"function","inputs":[{"name":"spender","type":"address"},{"name":"amount","type":"uint256"}],"outputs":[{"type":"bool"}]}]`))
+	if err != nil {
+		return 0, nil, nil, fmt.Errorf("failed to parse ABI: %w", err)
+	}
+
+	data, err := erc20ABI.Pack("approve", spender, amount)
+	if err != nil {
+		return 0, nil, nil, fmt.Errorf("failed to pack data: %w", err)
+	}
 
 	gasLimit, err := client.EstimateGas(context.Background(), ethereum.CallMsg{
 		From: from,

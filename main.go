@@ -7,15 +7,6 @@ import (
 	"log"
 )
 
-// RpcUrl 主网 RPC
-const RpcUrl = "https://xlayerrpc.okx.com"
-
-// PrivateKeyHex 你的测试私钥
-const PrivateKeyHex = "你的私钥"
-
-// WalletAddress 钱包地址
-const WalletAddress = "0xYourAddress"
-
 func main() {
 
 	// 1、连接连接 RPC 节点
@@ -35,10 +26,11 @@ func main() {
 		log.Fatal("查询代币价格失败！！！")
 	}
 
-	// 3、获取当前账户下所有的代币余额 指定使用okb
-	var tokenAddressArray []string
-	tokenAddressArray = append(tokenAddressArray, "0xe538905cf8410324e03a5a23c1c177a474d59b2b", "0x5a77f1443d16ee5761d310e38b62f77f726bc71c") // okb地址 eth地址
-	tokenBalanceMap, err := GetMultiERC20Balances(client, WalletAddress, tokenAddressArray)
+	// 3、获取当前账户下所有的okb eth 代币余额
+	tokenAddressMap := make(map[string]string)
+	tokenAddressMap["OKB"] = "0xe538905cf8410324e03a5a23c1c177a474d59b2b"
+	tokenAddressMap["ETH"] = "0x5a77f1443d16ee5761d310e38b62f77f726bc71c"
+	tokenBalanceMap, err := GetMultiERC20Balances(client, WalletAddress, tokenAddressMap)
 	if err != nil || len(tokenBalanceMap) == 0 {
 		log.Fatal("获取钱包下面代币余额失败！！！")
 	}
@@ -46,4 +38,5 @@ func main() {
 
 	// 4、发起买卖交易
 
+	defer client.Close()
 }
