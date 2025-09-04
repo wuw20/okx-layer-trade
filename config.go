@@ -14,3 +14,12 @@ const WalletAddress = "0xYourAddress"
 
 // RouterAddress dex router地址 UniswapV2
 const RouterAddress = "0xYourRouterAddress"
+
+// OKBAddress okb地址
+const OKBAddress = "0xe538905cf8410324e03a5a23c1c177a474d59b2b"
+
+// ETHAddress eth地址
+const ETHAddress = "0x5a77f1443d16ee5761d310e38b62f77f726bc71c"
+
+// USDTAddress usdt地址
+const USDTAddress = "0x1e4a5963abfd975d8c9021ce480b42188849d41d"

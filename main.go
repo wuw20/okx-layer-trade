@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"log"
+	"math/big"
 )
 
 func main() {
@@ -28,15 +29,23 @@ func main() {
 
 	// 3、获取当前账户下所有的okb eth 代币余额
 	tokenAddressMap := make(map[string]string)
-	tokenAddressMap["OKB"] = "0xe538905cf8410324e03a5a23c1c177a474d59b2b"
-	tokenAddressMap["ETH"] = "0x5a77f1443d16ee5761d310e38b62f77f726bc71c"
+	tokenAddressMap["OKB"] = OKBAddress
+	tokenAddressMap["ETH"] = ETHAddress
 	tokenBalanceMap, err := GetMultiERC20Balances(client, WalletAddress, tokenAddressMap)
 	if err != nil || len(tokenBalanceMap) == 0 {
 		log.Fatal("获取钱包下面代币余额失败！！！")
 	}
-	fmt.Println("获取到代币余额数组", tokenBalanceMap)
+	fmt.Println("获取到钱包下代币余额结果为", tokenBalanceMap)
 
-	// 4、发起买卖交易
+	// 4、单独校验 OKB或者ETH余额为0无法交易
+	for coinKey, coinBalance := range tokenBalanceMap {
+		if coinBalance.walletCoinBalance.Cmp(big.NewFloat(0)) <= 0 {
+			fmt.Println("该钱包下OKB账户余额为0，无法进行交易！！！", coinKey)
+			log.Fatal("该钱包下OKB账户余额为0，无法进行交易！！！")
+		}
+	}
+
+	// 5、发起买卖交易
 
 	defer client.Close()
 }

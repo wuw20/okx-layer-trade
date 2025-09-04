@@ -13,14 +13,14 @@ import (
 )
 
 // GetCoinPrice 查询单个代币价格
-func (f *DefaultCoinPriceServer) GetCoinPrice(client *ethclient.Client, coinAddress string) (map[string]CoinPrice, error) {
+func (f *DefaultCoinPriceServer) GetCoinPrice(client *ethclient.Client, coinAddress string) (map[string]CoinBalance, error) {
 
 	if len(coinAddress) == 0 {
 		fmt.Printf("传入的代币地址是空！！！")
 		return nil, nil
 	}
 
-	resultMap := make(map[string]CoinPrice)
+	resultMap := make(map[string]CoinBalance)
 
 	fmt.Printf("当前查询价格代币的代币地址: %s\n", coinAddress)
 	pairAddress := common.HexToAddress(coinAddress)
@@ -44,15 +44,13 @@ func (f *DefaultCoinPriceServer) GetCoinPrice(client *ethclient.Client, coinAddr
 	}
 	fmt.Printf("Reserve0: %s\nReserve1: %s\nTs: %d\n", r.Reserve0, r.Reserve1, r.BlockTimestampLast)
 
-	var token0Addr common.Address
+	var token0Addr, token1Addr common.Address
 	token0AddrAny := []any{&token0Addr}
 	if err := contract.Call(callOpts, &token0AddrAny, "token0"); err != nil {
 		fmt.Printf("token0 调用失败 (pair %s): %v\n", coinAddress, err)
 		return nil, fmt.Errorf("token0 调用失败！！！")
-
 	}
 
-	var token1Addr common.Address
 	token1AddrAny := []any{&token1Addr}
 	if err := contract.Call(callOpts, &token1AddrAny, "token1"); err != nil {
 		fmt.Printf("token1 调用失败 (pair %s): %v\n", coinAddress, err)
@@ -76,15 +74,57 @@ func (f *DefaultCoinPriceServer) GetCoinPrice(client *ethclient.Client, coinAddr
 		return nil, fmt.Errorf("reserve0 为 0 或 nil！！！")
 	}
 
-	// 转换储备量为浮点值，考虑decimals
-	reserve0Float := new(big.Float).Quo(new(big.Float).SetInt(r.Reserve0), big.NewFloat(math.Pow10(int(decimals0))))
-	reserve1Float := new(big.Float).Quo(new(big.Float).SetInt(r.Reserve1), big.NewFloat(math.Pow10(int(decimals1))))
+	// 固定计算代币/OKB 价格
+	okbAddress := common.HexToAddress(OKBAddress)
 
-	var price = new(big.Float).Quo(reserve1Float, reserve0Float)
-	fmt.Printf("链上价格(估): %s\n", price.Text('f', 18))
+	// 固定计算代币/USDT 价格
+	usdtAddress := common.HexToAddress(USDTAddress)
 
-	coinPrice := CoinPrice{tokenContractAddress: coinAddress, coinPrice: price, blockTimestampLast: r.BlockTimestampLast}
-	resultMap[coinAddress] = coinPrice
+	var price *big.Float
+	if token1Addr == okbAddress {
+		reserve0Float := new(big.Float).Quo(new(big.Float).SetInt(r.Reserve0), big.NewFloat(math.Pow10(int(decimals0))))
+		reserve1Float := new(big.Float).Quo(new(big.Float).SetInt(r.Reserve1), big.NewFloat(math.Pow10(int(decimals1))))
+		price = new(big.Float).Quo(reserve1Float, reserve0Float)
+		fmt.Printf("价格: 1 token0 ≈ %s OKB\n", price.Text('f', 18))
+		resultMap[token0Addr.Hex()] = CoinBalance{
+			coinAddress:        token0Addr.Hex(),
+			coinBalanceInOKB:   price,
+			blockTimestampLast: r.BlockTimestampLast,
+		}
+	} else if token0Addr == okbAddress { // 代币在 token1，OKB 在 token0
+		reserve0Float := new(big.Float).Quo(new(big.Float).SetInt(r.Reserve0), big.NewFloat(math.Pow10(int(decimals0))))
+		reserve1Float := new(big.Float).Quo(new(big.Float).SetInt(r.Reserve1), big.NewFloat(math.Pow10(int(decimals1))))
+		price = new(big.Float).Quo(reserve0Float, reserve1Float)
+		fmt.Printf("价格: 1 token1 ≈ %s OKB\n", price.Text('f', 18))
+		resultMap[token1Addr.Hex()] = CoinBalance{
+			coinAddress:        token1Addr.Hex(),
+			coinBalanceInOKB:   price,
+			blockTimestampLast: r.BlockTimestampLast,
+		}
+	} else if token1Addr == usdtAddress {
+		reserve0Float := new(big.Float).Quo(new(big.Float).SetInt(r.Reserve0), big.NewFloat(math.Pow10(int(decimals0))))
+		reserve1Float := new(big.Float).Quo(new(big.Float).SetInt(r.Reserve1), big.NewFloat(math.Pow10(int(decimals1))))
+		price = new(big.Float).Quo(reserve1Float, reserve0Float)
+		fmt.Printf("价格: 1 token0 ≈ %s OKB\n", price.Text('f', 18))
+		resultMap[token0Addr.Hex()] = CoinBalance{
+			coinAddress:        token0Addr.Hex(),
+			coinBalanceInUSDT:  price,
+			blockTimestampLast: r.BlockTimestampLast,
+		}
+	} else if token0Addr == usdtAddress {
+		reserve0Float := new(big.Float).Quo(new(big.Float).SetInt(r.Reserve0), big.NewFloat(math.Pow10(int(decimals0))))
+		reserve1Float := new(big.Float).Quo(new(big.Float).SetInt(r.Reserve1), big.NewFloat(math.Pow10(int(decimals1))))
+		price = new(big.Float).Quo(reserve0Float, reserve1Float)
+		fmt.Printf("价格: 1 token1 ≈ %s OKB\n", price.Text('f', 18))
+		resultMap[token1Addr.Hex()] = CoinBalance{
+			coinAddress:        token1Addr.Hex(),
+			coinBalanceInUSDT:  price,
+			blockTimestampLast: r.BlockTimestampLast,
+		}
+	} else {
+		return nil, fmt.Errorf("pair %s 不包含 OKB，无法计算代币/OKB 价格", pairAddress)
+	}
+
 	return resultMap, nil
 }
 

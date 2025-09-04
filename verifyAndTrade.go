@@ -1,16 +1,13 @@
 package main
 
 import (
-	"fmt"
 	"github.com/ethereum/go-ethereum/common"
-	"log"
+	"math/big"
 )
 
 // VerifyAndTradeService VerifyAndTrade 验证apiKey和交易 并且返回txHash
 func VerifyAndTradeService(verifyAndTrade VerifyAndTrade) (string, error) {
 
-	// 交易方向
-	tradeType := verifyAndTrade.tradeType
 	client := verifyAndTrade.client
 	ctx := verifyAndTrade.ctx
 
@@ -21,31 +18,24 @@ func VerifyAndTradeService(verifyAndTrade VerifyAndTrade) (string, error) {
 
 	coinPriceMap := verifyAndTrade.coinPriceMap
 	var coinAddress string
-	var coinPrice CoinPrice
+	var coinBalance CoinBalance
 	for k, v := range coinPriceMap {
 		coinAddress = k
-		coinPrice = v
+		coinBalance = v
 	}
-	fmt.Println("卖出的代币地址，和当前代币价格", coinAddress, coinPrice)
-	coinBalanceMap := verifyAndTrade.coinBalanceMap
+
+	walletCoinBalanceMap := verifyAndTrade.walletCoinBalanceMap
 	var okbCoinBalance CoinBalance
-	okbCoinBalance = coinBalanceMap["OKB"]
 
-	var tokenOut common.Address
-	var tokenIn common.Address
-	if tradeType == "in" {
-		tokenOut := common.HexToAddress(coinAddress)               // 你买入的代币
-		tokenIn := common.HexToAddress(okbCoinBalance.coinAddress) // 你卖出的代币
+	// ===== 示例参数（替换成你的实际数据） =====
+	from := common.HexToAddress(WalletAddress)
+	router := common.HexToAddress(RouterAddress)
 
-	} else if tradeType == "out" {
-		tokenOut := common.HexToAddress(okbCoinBalance.coinAddress)
-		tokenIn := common.HexToAddress(coinAddress)
-	} else {
-		log.Fatal("交易不合法")
-		return "", fmt.Errorf("交易不合法！！！")
-	}
-
-	path := []common.Address{tokenIn, tokenOut}
+	tokenIn := common.HexToAddress("0xYourTokenIn")
+	tokenOut := common.HexToAddress("0xYourTokenOut")
+	amountIn := big.NewInt(1e18)       // 卖出 1 tokenIn
+	amountOutMin := big.NewInt(0)      // 演示用，生产环境要设置合理滑点保护
+	deadline := big.NewInt(9999999999) // 演示用
 
 	return "", nil
 }

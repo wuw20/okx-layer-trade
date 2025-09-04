@@ -12,14 +12,14 @@ import (
 )
 
 // GetMultiERC20Balances 查询账户下面的代币余额
-func GetMultiERC20Balances(client *ethclient.Client, walletAddr string, tokenAddressesMap map[string]string) (map[string]CoinBalance, error) {
+func GetMultiERC20Balances(client *ethclient.Client, walletAddr string, tokenAddressesMap map[string]string) (map[string]WalletCoinBalance, error) {
 	parsedABI, err := abi.JSON(strings.NewReader(erc20ABI))
 	if err != nil {
 		return nil, fmt.Errorf("解析ERC20 ABI失败: %v", err)
 	}
 	callOpts := &bind.CallOpts{Context: context.Background()}
 
-	resultMap := make(map[string]CoinBalance)
+	resultMap := make(map[string]WalletCoinBalance)
 	for coinKey, coinAddress := range tokenAddressesMap {
 		contract := bind.NewBoundContract(common.HexToAddress(coinAddress), parsedABI, client, client, client)
 
@@ -41,11 +41,11 @@ func GetMultiERC20Balances(client *ethclient.Client, walletAddr string, tokenAdd
 		divisor := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil)
 		balanceFloat := new(big.Float).Quo(new(big.Float).SetInt(balance), new(big.Float).SetInt(divisor))
 
-		tokenBalance := CoinBalance{
-			coinAddress: coinAddress,
-			balance:     balanceFloat,
+		walletCoinBalance := WalletCoinBalance{
+			walletCoinAddress: coinAddress,
+			walletCoinBalance: balanceFloat,
 		}
-		resultMap[coinKey] = tokenBalance
+		resultMap[coinKey] = walletCoinBalance
 	}
 	return resultMap, nil
 }
