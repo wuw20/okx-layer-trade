@@ -13,16 +13,13 @@ import (
 	"strings"
 )
 
-const pairABI = `[{"constant":true,"inputs":[],"name":"getReserves","outputs":[{"internalType":"uint112","name":"_reserve0","type":"uint112"},{"internalType":"uint112","name":"_reserve1","type":"uint112"},{"internalType":"uint32","name":"_blockTimestampLast","type":"uint32"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":true,"inputs":[],"name":"token0","outputs":[{"internalType":"address","name":"","type":"address"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":true,"inputs":[],"name":"token1","outputs":[{"internalType":"address","name":"","type":"address"}],"payable":false,"stateMutability":"view","type":"function"}]`
-const erc20ABI = `[{"constant":true,"inputs":[],"name":"decimals","outputs":[{"name":"","type":"uint8"}],"payable":false,"stateMutability":"view","type":"function"}]`
-
-// GetCoinArrayPrice 批量查询代币价格
-func GetCoinArrayPrice(client *ethclient.Client, coinAddressArray []string) map[string]CoinPrice {
+// GetArrayCoinPrice 批量查询代币价格
+func (f *DefaultCoinPriceServer) GetArrayCoinPrice(client *ethclient.Client, coinAddressArray []string) (map[string]CoinPrice, error) {
 
 	// 传入数组为空返回 null
 	if len(coinAddressArray) == 0 {
 		fmt.Printf("传入查询代币数组为空！！！")
-		return nil
+		return nil, nil
 	}
 
 	resultMap := make(map[string]CoinPrice)
@@ -91,22 +88,5 @@ func GetCoinArrayPrice(client *ethclient.Client, coinAddressArray []string) map[
 		coinPrice := CoinPrice{tokenContractAddress: coinAddress, coinPrice: price, blockTimestampLast: r.BlockTimestampLast}
 		resultMap[coinAddress] = coinPrice
 	}
-	return resultMap
-}
-
-// 获取token精度
-func getTokenDecimals(client *ethclient.Client, tokenAddress common.Address) (uint8, error) {
-	parsedERC20ABI, err := abi.JSON(strings.NewReader(erc20ABI))
-	if err != nil {
-		return 0, fmt.Errorf("解析ERC20 ABI失败: %v", err)
-	}
-	contract := bind.NewBoundContract(tokenAddress, parsedERC20ABI, client, client, client)
-	callOpts := &bind.CallOpts{Context: context.Background()}
-
-	var decimals uint8
-	decimalsAny := []any{&decimals}
-	if err := contract.Call(callOpts, &decimalsAny, "decimals"); err != nil {
-		return 0, err
-	}
-	return decimals, nil
+	return resultMap, nil
 }
