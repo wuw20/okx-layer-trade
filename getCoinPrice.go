@@ -17,7 +17,7 @@ const pairABI = `[{"constant":true,"inputs":[],"name":"getReserves","outputs":[{
 const erc20ABI = `[{"constant":true,"inputs":[],"name":"decimals","outputs":[{"name":"","type":"uint8"}],"payable":false,"stateMutability":"view","type":"function"}]`
 
 // GetCoinArrayPrice 批量查询代币价格
-func GetCoinArrayPrice(client *ethclient.Client, coinAddressArray []string) []CoinPrice {
+func GetCoinArrayPrice(client *ethclient.Client, coinAddressArray []string) map[string]CoinPrice {
 
 	// 传入数组为空返回 null
 	if len(coinAddressArray) == 0 {
@@ -25,7 +25,8 @@ func GetCoinArrayPrice(client *ethclient.Client, coinAddressArray []string) []Co
 		return nil
 	}
 
-	var results []CoinPrice
+	resultMap := make(map[string]CoinPrice)
+
 	// 循环查询 后可以改为并发查
 	for _, coinAddress := range coinAddressArray {
 
@@ -87,9 +88,10 @@ func GetCoinArrayPrice(client *ethclient.Client, coinAddressArray []string) []Co
 		var price = new(big.Float).Quo(reserve1Float, reserve0Float)
 		fmt.Printf("链上价格(估): %s\n", price.Text('f', 18))
 
-		results = append(results, CoinPrice{tokenContractAddress: coinAddress, coinPrice: price, blockTimestampLast: r.BlockTimestampLast})
+		coinPrice := CoinPrice{tokenContractAddress: coinAddress, coinPrice: price, blockTimestampLast: r.BlockTimestampLast}
+		resultMap[coinAddress] = coinPrice
 	}
-	return results
+	return resultMap
 }
 
 // 获取token精度
