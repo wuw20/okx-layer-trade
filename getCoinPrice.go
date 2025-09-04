@@ -1,0 +1,110 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/ethereum/go-ethereum/accounts/abi/bind"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/ethclient"
+	"log"
+	"math"
+	"math/big"
+	"strings"
+)
+
+const pairABI = `[{"constant":true,"inputs":[],"name":"getReserves","outputs":[{"internalType":"uint112","name":"_reserve0","type":"uint112"},{"internalType":"uint112","name":"_reserve1","type":"uint112"},{"internalType":"uint32","name":"_blockTimestampLast","type":"uint32"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":true,"inputs":[],"name":"token0","outputs":[{"internalType":"address","name":"","type":"address"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":true,"inputs":[],"name":"token1","outputs":[{"internalType":"address","name":"","type":"address"}],"payable":false,"stateMutability":"view","type":"function"}]`
+const erc20ABI = `[{"constant":true,"inputs":[],"name":"decimals","outputs":[{"name":"","type":"uint8"}],"payable":false,"stateMutability":"view","type":"function"}]`
+
+// GetCoinArrayPrice 批量查询代币价格
+func GetCoinArrayPrice(client *ethclient.Client, coinAddressArray []string) []CoinPrice {
+
+	// 传入数组为空返回 null
+	if len(coinAddressArray) == 0 {
+		fmt.Printf("传入查询代币数组为空！！！")
+		return nil
+	}
+
+	var results []CoinPrice
+	// 循环查询 后可以改为并发查
+	for _, coinAddress := range coinAddressArray {
+
+		fmt.Printf("当前查询价格代币的代币地址: %s\n", coinAddress)
+		pairAddress := common.HexToAddress(coinAddress)
+		parsedABI, err := abi.JSON(strings.NewReader(pairABI))
+		if err != nil {
+			fmt.Printf("解析ABI失败：%v\\n", err)
+			continue
+		}
+
+		// 调用合约
+		callOpts := &bind.CallOpts{Context: context.Background()}
+		// 用 BoundContract.Call + struct 接收
+		contract := bind.NewBoundContract(pairAddress, parsedABI, client, client, client)
+
+		var r Reserves
+		var callResults = []any{&r.Reserve0, &r.Reserve1, &r.BlockTimestampLast}
+		if err := contract.Call(callOpts, &callResults, "getReserves"); err != nil {
+			log.Printf("getReserves 调用失败 (pair %s): %v\n", coinAddress, err)
+			continue
+		}
+		fmt.Printf("Reserve0: %s\nReserve1: %s\nTs: %d\n", r.Reserve0, r.Reserve1, r.BlockTimestampLast)
+
+		var token0Addr common.Address
+		token0AddrAny := []any{&token0Addr}
+		if err := contract.Call(callOpts, &token0AddrAny, "token0"); err != nil {
+			log.Printf("token0 调用失败 (pair %s): %v\n", coinAddress, err)
+			continue
+		}
+
+		var token1Addr common.Address
+		token1AddrAny := []any{&token1Addr}
+		if err := contract.Call(callOpts, &token1AddrAny, "token1"); err != nil {
+			log.Printf("token1 调用失败 (pair %s): %v\n", coinAddress, err)
+			continue
+		}
+
+		decimals0, err := getTokenDecimals(client, token0Addr)
+		if err != nil {
+			log.Printf("获取token0 decimals失败 (token %s): %v\n", token0Addr.Hex(), err)
+			continue
+		}
+		decimals1, err := getTokenDecimals(client, token1Addr)
+		if err != nil {
+			log.Printf("获取token1 decimals失败 (token %s): %v\n", token1Addr.Hex(), err)
+			continue
+		}
+
+		if r.Reserve0 == nil || r.Reserve0.Sign() == 0 {
+			fmt.Printf("Reserve0 为 0 或 nil (%s)，无法计算价格\n", coinAddress)
+			continue
+		}
+
+		// 转换储备量为浮点值，考虑decimals
+		reserve0Float := new(big.Float).Quo(new(big.Float).SetInt(r.Reserve0), big.NewFloat(math.Pow10(int(decimals0))))
+		reserve1Float := new(big.Float).Quo(new(big.Float).SetInt(r.Reserve1), big.NewFloat(math.Pow10(int(decimals1))))
+
+		var price = new(big.Float).Quo(reserve1Float, reserve0Float)
+		fmt.Printf("链上价格(估): %s\n", price.Text('f', 18))
+
+		results = append(results, CoinPrice{tokenContractAddress: coinAddress, coinPrice: price, blockTimestampLast: r.BlockTimestampLast})
+	}
+	return results
+}
+
+// 获取token精度
+func getTokenDecimals(client *ethclient.Client, tokenAddress common.Address) (uint8, error) {
+	parsedERC20ABI, err := abi.JSON(strings.NewReader(erc20ABI))
+	if err != nil {
+		return 0, fmt.Errorf("解析ERC20 ABI失败: %v", err)
+	}
+	contract := bind.NewBoundContract(tokenAddress, parsedERC20ABI, client, client, client)
+	callOpts := &bind.CallOpts{Context: context.Background()}
+
+	var decimals uint8
+	decimalsAny := []any{&decimals}
+	if err := contract.Call(callOpts, &decimalsAny, "decimals"); err != nil {
+		return 0, err
+	}
+	return decimals, nil
+}
