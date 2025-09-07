@@ -37,13 +37,10 @@ func GetMultiERC20Balances(client *ethclient.Client, walletAddr string, tokenAdd
 			return nil, fmt.Errorf("调用decimals失败 (%s): %v", coinAddress, err)
 		}
 
-		// 3. 转换成人类可读
-		divisor := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil)
-		balanceFloat := new(big.Float).Quo(new(big.Float).SetInt(balance), new(big.Float).SetInt(divisor))
-
 		walletCoinBalance := WalletCoinBalance{
 			walletCoinAddress: coinAddress,
-			walletCoinBalance: balanceFloat,
+			walletCoinBalance: balance,
+			coinDecimals:      decimals,
 		}
 		resultMap[coinKey] = walletCoinBalance
 	}

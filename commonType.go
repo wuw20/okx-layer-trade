@@ -15,27 +15,38 @@ type CoinBalance struct {
 	blockTimestampLast uint32     // 调用时间
 }
 
-// Reserves 命名返回值用 struct + abi 标签来接
-type Reserves struct {
-	Reserve0           *big.Int `abi:"_reserve0"`
-	Reserve1           *big.Int `abi:"_reserve1"`
-	BlockTimestampLast uint32   `abi:"_blockTimestampLast"`
-}
-
 // VerifyAndTrade 验证apiKey和交易入参
 type VerifyAndTrade struct {
 	privateKeyHex        string                       // apiKey
 	ctx                  context.Context              // rpc连接
 	client               *ethclient.Client            // rpc节点clint
-	tradePrice           *big.Int                     // 交易金额 okb
 	chainID              *big.Int                     // X Layer 主网 chainId
-	coinPriceMap         map[string]CoinBalance       // 代币价格 代币/OKB
 	walletCoinBalanceMap map[string]WalletCoinBalance // 账户下代币余额
-	tradeQuantity        *big.Int                     // 交易代币数量 单位wei
+	tradeQuantity        *big.Int                     // 交易代币数量
 }
 
 // WalletCoinBalance 钱包地址下指定代币的余额
 type WalletCoinBalance struct {
-	walletCoinAddress string     // 代币地址
-	walletCoinBalance *big.Float // 余额
+	walletCoinAddress string   // 代币地址
+	walletCoinBalance *big.Int // 余额
+	coinDecimals      uint8    // 代币单位
+}
+
+// TradeCoinParam 交易传入值
+type TradeCoinParam struct {
+	tradeApiKey        string // apikey x layer
+	tradeType          string // 交易类型 buy sell 买卖
+	tradeCoinAddress   string // 交易代币地址
+	tradeWalletAddress string // 交易钱包地址
+	tradeSlippageFee   string // 滑点费用
+	tradeQuantity      string // 交易数量
+}
+
+// SellCoinParam 卖代币入参
+type SellCoinParam struct {
+	tradeApiKey        string   // apikey x layer
+	tradeCoinAddress   string   // 交易代币地址
+	tradeWalletAddress string   // 交易钱包地址
+	amountOutMin       *big.Int //滑点
+	amountIn           *big.Int // 交易数量
 }
