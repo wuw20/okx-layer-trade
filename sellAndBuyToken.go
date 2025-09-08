@@ -20,10 +20,11 @@ import (
 // 参数 amountHuman 表示人类可读的输入代币数量
 func SwapTokens(ctx context.Context, client *ethclient.Client, cfg TradeInfo, tokenIn, tokenOut common.Address, amountHuman float64) error {
 
+	// 私钥验证
 	pubKey := cfg.PrivateKey.Public()
 	pubKeyECDSA, ok := pubKey.(*ecdsa.PublicKey)
 	if !ok {
-		return fmt.Errorf("invalid public key type")
+		return fmt.Errorf("私钥推导公钥失败，交易失败")
 	}
 	from := crypto.PubkeyToAddress(*pubKeyECDSA)
 
@@ -33,7 +34,7 @@ func SwapTokens(ctx context.Context, client *ethclient.Client, cfg TradeInfo, to
 	// 1. 获取代币精度 & 余额
 	decimals, err := CallDecimals(ctx, client, erc20ABI, tokenIn)
 	if err != nil {
-		return fmt.Errorf("get decimals error: %w", err)
+		return fmt.Errorf("获取代币精度失败: %w", err)
 	}
 	amountIn := ToWeiFloat(amountHuman, int(decimals))
 
@@ -42,29 +43,30 @@ func SwapTokens(ctx context.Context, client *ethclient.Client, cfg TradeInfo, to
 		return err
 	}
 	if amountIn.Cmp(tokenBal) > 0 {
-		return fmt.Errorf("amount exceeds token balance")
+		return fmt.Errorf("交易金额大于账户余额")
 	}
 
 	// 2. allowance 授权检查 授权Router可以提取足够代币
 	allowance, _ := CallAllowance(ctx, client, erc20ABI, tokenIn, from, cfg.RouterAddr)
 	nonce, _ := client.PendingNonceAt(ctx, from)
+	// 建议gas费用
 	gasPrice, _ := client.SuggestGasPrice(ctx)
 
 	if allowance.Cmp(amountIn) < 0 {
-		fmt.Println("Allowance not enough, approving...")
+		fmt.Println("approve交易认证失败，重新去获取授权")
 		approveData, _ := erc20ABI.Pack("approve", cfg.RouterAddr, amountIn)
 
-		// 计算 gasLimit
+		// approve gasLimit 比较固定为80000gas 这里也可以作为配置项
 		gasLimit := uint64(80000)
 
 		// 检查 ETH 余额是否足够支付手续费
 		balanceEth, err := client.BalanceAt(ctx, from, nil)
 		if err != nil {
-			return fmt.Errorf("failed to get ETH balance: %w", err)
+			return fmt.Errorf("获取ETH余额失败: %w", err)
 		}
 		requiredEth := new(big.Int).Mul(new(big.Int).SetUint64(gasLimit), gasPrice)
 		if balanceEth.Cmp(requiredEth) < 0 {
-			return fmt.Errorf("insufficient ETH balance for approve transaction fee")
+			return fmt.Errorf("ETH费用少于Approve需要认证的费用")
 		}
 
 		approveTx := types.NewTransaction(nonce, tokenIn, big.NewInt(0), gasLimit, gasPrice, approveData)
@@ -76,7 +78,7 @@ func SwapTokens(ctx context.Context, client *ethclient.Client, cfg TradeInfo, to
 
 		// 等待上链（异步日志监听）
 		if err := WaitMinedLogs(ctx, client, signedApprove.Hash()); err != nil {
-			return fmt.Errorf("approve failed: %w", err)
+			return fmt.Errorf("交易认证失败: %w", err)
 		}
 		nonce++
 	}
@@ -88,9 +90,11 @@ func SwapTokens(ctx context.Context, client *ethclient.Client, cfg TradeInfo, to
 	var amounts []*big.Int
 	_ = routerABI.UnpackIntoInterface(&amounts, "getAmountsOut", out)
 	if len(amounts) < 2 {
-		return fmt.Errorf("router getAmountsOut returned empty")
+		return fmt.Errorf("向router获取交易费用为空")
 	}
 	amountOut := amounts[1]
+
+	// 计算滑点
 	amountOutMin := ApplySlippage(amountOut, cfg.SlippageBP)
 
 	// 4. 构造 swap 交易
@@ -106,11 +110,11 @@ func SwapTokens(ctx context.Context, client *ethclient.Client, cfg TradeInfo, to
 	// 检查 ETH 余额是否足够支付手续费
 	balanceEth, err := client.BalanceAt(ctx, from, nil)
 	if err != nil {
-		return fmt.Errorf("failed to get ETH balance: %w", err)
+		return fmt.Errorf("获取ETH余额失败: %w", err)
 	}
 	requiredEth := new(big.Int).Mul(new(big.Int).SetUint64(gasLimit), gasPrice)
 	if balanceEth.Cmp(requiredEth) < 0 {
-		return fmt.Errorf("insufficient ETH balance for swap transaction fee")
+		return fmt.Errorf("账户余额不足以支付gas费用")
 	}
 
 	swapTx := types.NewTransaction(nonce, cfg.RouterAddr, big.NewInt(0), gasLimit, gasPrice, swapData)
@@ -119,7 +123,7 @@ func SwapTokens(ctx context.Context, client *ethclient.Client, cfg TradeInfo, to
 	if err := client.SendTransaction(ctx, signedSwap); err != nil {
 		return err
 	}
-	fmt.Printf("Swap tx sent: %s\n", signedSwap.Hash().Hex())
+	fmt.Printf("交易发送成功之后的txHash: %s\n", signedSwap.Hash().Hex())
 
 	return WaitMinedLogs(ctx, client, signedSwap.Hash())
 }
