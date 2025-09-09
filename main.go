@@ -24,41 +24,80 @@ const ERC20ABI = `[{"constant":true,"inputs":[{"name":"owner","type":"address"}]
 {"constant":true,"inputs":[{"name":"owner","type":"address"},{"name":"spender","type":"address"}],"name":"allowance","outputs":[{"name":"","type":"uint256"}],"type":"function"},
 {"constant":false,"inputs":[{"name":"spender","type":"address"},{"name":"value","type":"uint256"}],"name":"approve","outputs":[{"name":"","type":"bool"}],"type":"function"}]`
 
-// RouterABI 最小子集（UniswapV2 风格）
-const RouterABI = `[{"constant":true,"inputs":[{"name":"amountIn","type":"uint256"},{"name":"path","type":"address[]"}],"name":"getAmountsOut","outputs":[{"name":"","type":"uint256[]"}],"type":"function"},
-{"constant":false,"inputs":[{"name":"amountIn","type":"uint256"},{"name":"amountOutMin","type":"uint256"},{"name":"path","type":"address[]"},{"name":"to","type":"address"},{"name":"deadline","type":"uint256"}],"name":"swapExactTokensForTokens","outputs":[{"name":"amounts","type":"uint256[]"}],"type":"function"}]`
+// RouterABI 最小子集
+const RouterABI = `[{
+  "constant": true,
+  "inputs": [
+    {"name": "amountIn", "type": "uint256"},
+    {"name": "path", "type": "address[]"}
+  ],
+  "name": "getAmountsOut",
+  "outputs": [
+    {"name": "amounts", "type": "uint256[]"}
+  ],
+  "stateMutability": "view",
+  "type": "function"
+},
+{
+  "constant": false,
+  "inputs": [
+    {"name":"amountOutMin","type":"uint256"},
+    {"name":"path","type":"address[]"},
+    {"name":"to","type":"address"},
+    {"name":"deadline","type":"uint256"}
+  ],
+  "name":"swapExactETHForTokens",
+  "outputs":[{"name":"amounts","type":"uint256[]"}],
+  "type":"function"
+},
+{
+  "constant": false,
+  "inputs": [
+    {"name":"amountIn","type":"uint256"},
+    {"name":"amountOutMin","type":"uint256"},
+    {"name":"path","type":"address[]"},
+    {"name":"to","type":"address"},
+    {"name":"deadline","type":"uint256"}
+  ],
+  "name":"swapExactTokensForTokens",
+  "outputs":[{"name":"amounts","type":"uint256[]"}],
+  "type":"function"
+}]`
 
 var cfg = struct {
-	TokenAddr  string
-	OkbAddr    string
-	RouterAddr string
-	ChainID    int64
-	SlippageBP int
-	Deadline   int
-	PrivateKey string
-	opType     string
-	amount     string
+	TokenAddr   string
+	OkbAddr     string
+	RouterAddr  string
+	ChainID     int64
+	SlippageBP  int
+	Deadline    int
+	PrivateKey  string
+	opType      string
+	amount      string
+	AutoApprove bool
 }{
-	TokenAddr:  "0x0cc24c51bf89c00c5affbfcf5e856c25ecbdb48e",                         // XDOG代币地址
-	OkbAddr:    "0xe538905cf8410324e03a5a23c1c177a474d59b2b",                         // okb地址
-	RouterAddr: "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D",                         // router地址
-	ChainID:    196,                                                                  // x layer
-	SlippageBP: 50,                                                                   // 设置的滑点
-	Deadline:   30,                                                                   // 超时时间30s
-	PrivateKey: "0x623f230c83b4343cd0e2423a6114ca4e8a16b57f596b9ab229cbc1d9e077b7fc", // okx申请的私钥
-	opType:     "buy",                                                                // 交易类型
-	amount:     "0.00001",                                                            // 交易金额
+	TokenAddr:   "0x0cc24c51bf89c00c5affbfcf5e856c25ecbdb48e",                         // XDOG代币地址
+	OkbAddr:     "0xe538905cf8410324e03a5a23c1c177a474d59b2b",                         // wOkb地址
+	RouterAddr:  "0xcc6C3FB4a9Dc710c4a187D2c5CD032c7F5086f0a",                         // xlayer router地址
+	ChainID:     196,                                                                  // x layer
+	SlippageBP:  50,                                                                   // 设置的滑点
+	Deadline:    30,                                                                   // 超时时间30s
+	PrivateKey:  "0x623f230c83b4343cd0e2423a6114ca4e8a16b57f596b9ab229cbc1d9e077b7fc", // okx申请的私钥
+	opType:      "buy",                                                                // 交易类型
+	amount:      "0.0000001",                                                          // 交易金额
+	AutoApprove: false,
 }
 
 // TradeInfo 交易入参
 type TradeInfo struct {
-	PrivateKey *ecdsa.PrivateKey // 钱包私钥
-	TokenAddr  common.Address    // 代币地址
-	OkbAddr    common.Address    // okb地址
-	RouterAddr common.Address    // router地址
-	ChainID    *big.Int          // x layer地址
-	SlippageBP int               // 滑点
-	Deadline   time.Duration     // 超时时间
+	PrivateKey  *ecdsa.PrivateKey // 钱包私钥
+	TokenAddr   common.Address    // 代币地址
+	OkbAddr     common.Address    // okb地址
+	RouterAddr  common.Address    // router地址
+	ChainID     *big.Int          // x layer地址
+	SlippageBP  int               // 滑点
+	Deadline    time.Duration     // 超时时间
+	AutoApprove bool              // 是否开启授权
 }
 
 func main() {
@@ -92,17 +131,19 @@ func main() {
 	}
 
 	sellCfg := TradeInfo{
-		PrivateKey: privateKey,
-		TokenAddr:  common.HexToAddress(cfg.TokenAddr),
-		OkbAddr:    common.HexToAddress(cfg.OkbAddr),
-		RouterAddr: common.HexToAddress(cfg.RouterAddr),
-		ChainID:    big.NewInt(cfg.ChainID),
-		SlippageBP: cfg.SlippageBP,
-		Deadline:   time.Duration(cfg.Deadline) * time.Second,
+		PrivateKey:  privateKey,
+		TokenAddr:   common.HexToAddress(cfg.TokenAddr),
+		OkbAddr:     common.HexToAddress(cfg.OkbAddr),
+		RouterAddr:  common.HexToAddress(cfg.RouterAddr),
+		ChainID:     big.NewInt(cfg.ChainID),
+		SlippageBP:  cfg.SlippageBP,
+		Deadline:    time.Duration(cfg.Deadline) * time.Second,
+		AutoApprove: cfg.AutoApprove,
 	}
 
-	// 调用 SwapTokens
+	// 输入金额转化
 	amount, err := strconv.ParseFloat(cfg.amount, 64)
+	// 调用 SwapTokens
 	err = SwapTokens(ctx, client, sellCfg, tokenIn, tokenOut, amount)
 	if err != nil {
 		log.Fatalf("交易执行失败: %v", err)
@@ -139,47 +180,42 @@ func SwapTokens(ctx context.Context, client *ethclient.Client, cfg TradeInfo, to
 		return err
 	}
 	if amountIn.Cmp(balanceOKB) > 0 {
-		return fmt.Errorf("交易金额大于账户余额", balanceOKB, amountIn)
+		return fmt.Errorf("交易金额大于账户余额: %w, %w", balanceOKB, amountIn)
 	}
 
 	// 2. allowance 授权检查 授权Router可以提取足够代币
 	allowance, _ := CallAllowance(ctx, client, erc20ABI, tokenIn, from, cfg.RouterAddr)
 	nonce, _ := client.PendingNonceAt(ctx, from)
-	// 建议gas费用
-	gasPrice, _ := client.SuggestGasPrice(ctx)
 
 	if allowance.Cmp(amountIn) < 0 {
-		fmt.Println("approve交易认证失败，重新去获取授权")
-		approveData, _ := erc20ABI.Pack("approve", cfg.RouterAddr, amountIn)
-
-		// approve gasLimit 比较固定为80000gas 这里也可以作为配置项
-		gasLimit := uint64(80000)
-
-		requiredOKB := new(big.Int).Mul(new(big.Int).SetUint64(gasLimit), gasPrice)
-		if balanceOKB.Cmp(requiredOKB) < 0 {
-			return fmt.Errorf("ETH费用少于Approve需要认证的费用")
+		if cfg.AutoApprove {
+			if err := AutoApproveXLayer(ctx, client, erc20ABI, tokenIn, cfg.RouterAddr, from, cfg.PrivateKey, cfg.ChainID, amountIn); err != nil {
+				return err
+			}
+			nonce, _ = client.PendingNonceAt(ctx, from) // 更新 nonce
+		} else {
+			return fmt.Errorf("需要交易的金额大于授权Router可提取的金额: allowance=%s, amountIn=%s", allowance.String(), amountIn.String())
 		}
-
-		approveTx := types.NewTransaction(nonce, tokenIn, big.NewInt(0), gasLimit, gasPrice, approveData)
-		signedApprove, _ := types.SignTx(approveTx, types.NewEIP155Signer(cfg.ChainID), cfg.PrivateKey)
-		if err := client.SendTransaction(ctx, signedApprove); err != nil {
-			return err
-		}
-		fmt.Printf("Approve tx sent: %s\n", signedApprove.Hash().Hex())
-
-		// 等待上链（异步日志监听）
-		if err := WaitMinedLogs(ctx, client, signedApprove.Hash()); err != nil {
-			return fmt.Errorf("交易认证失败: %w", err)
-		}
-		nonce++
 	}
 
-	// 3. 获取 amountOutMin
+	// 3. 获取 amountOutMin 交易滑点
 	path := []common.Address{tokenIn, tokenOut}
+	fmt.Printf("Calling getAmountsOut, amountIn=%s, path=%v\n", amountIn.String(), path)
+
 	getOutData, _ := routerABI.Pack("getAmountsOut", amountIn, path)
-	out, _ := client.CallContract(ctx, ethereum.CallMsg{To: &cfg.RouterAddr, Data: getOutData}, nil)
+	out, err := client.CallContract(ctx, ethereum.CallMsg{To: &cfg.RouterAddr, Data: getOutData}, nil)
+	if err != nil {
+		return fmt.Errorf("call getAmountsOut failed: %w", err)
+	}
+	if len(out) == 0 {
+		return fmt.Errorf("getAmountsOut 返回为空，请检查 Router 地址或交易对是否存在流动性")
+	}
+
 	var amounts []*big.Int
-	_ = routerABI.UnpackIntoInterface(&amounts, "getAmountsOut", out)
+	err = routerABI.UnpackIntoInterface(&amounts, "getAmountsOut", out)
+	if err != nil {
+		return fmt.Errorf("解包失败: %v", err)
+	}
 	if len(amounts) < 2 {
 		return fmt.Errorf("向router获取交易费用为空")
 	}
@@ -190,7 +226,18 @@ func SwapTokens(ctx context.Context, client *ethclient.Client, cfg TradeInfo, to
 
 	// 4. 构造 swap 交易
 	deadline := big.NewInt(time.Now().Add(cfg.Deadline).Unix())
-	swapData, _ := routerABI.Pack("swapExactTokensForTokens", amountIn, amountOutMin, path, from, deadline)
+
+	var swapData []byte
+	if tokenIn == cfg.OkbAddr {
+		// 用原生OKB买代币
+		swapData, _ = routerABI.Pack("swapExactETHForTokens", amountOutMin, path, from, deadline)
+	} else if tokenOut == cfg.OkbAddr {
+		// 卖代币换原生OKB
+		swapData, _ = routerABI.Pack("swapExactTokensForETH", amountIn, amountOutMin, path, from, deadline)
+	} else {
+		// 代币之间互换
+		swapData, _ = routerABI.Pack("swapExactTokensForTokens", amountIn, amountOutMin, path, from, deadline)
+	}
 
 	msg := ethereum.CallMsg{From: from, To: &cfg.RouterAddr, Data: swapData}
 	gasLimit, err := client.EstimateGas(ctx, msg)
@@ -199,20 +246,30 @@ func SwapTokens(ctx context.Context, client *ethclient.Client, cfg TradeInfo, to
 	}
 
 	// 检查OKB余额是否足够支付手续费
+	// 建议gas费用
+	gasPrice, _ := client.SuggestGasPrice(ctx)
 	requiredOKB := new(big.Int).Mul(new(big.Int).SetUint64(gasLimit), gasPrice)
 	if balanceOKB.Cmp(requiredOKB) < 0 {
 		return fmt.Errorf("账户余额不足以支付gas费用")
 	}
 
-	swapTx := types.NewTransaction(nonce, cfg.RouterAddr, big.NewInt(0), gasLimit, gasPrice, swapData)
+	var txValue *big.Int
+	if tokenIn == cfg.OkbAddr {
+		txValue = amountIn
+	} else {
+		txValue = big.NewInt(0)
+	}
+	swapTx := types.NewTransaction(nonce, cfg.RouterAddr, txValue, gasLimit, gasPrice, swapData)
 	signedSwap, _ := types.SignTx(swapTx, types.NewEIP155Signer(cfg.ChainID), cfg.PrivateKey)
 
-	if err := client.SendTransaction(ctx, signedSwap); err != nil {
-		return err
-	}
-	fmt.Printf("交易发送成功之后的txHash: %s\n", signedSwap.Hash().Hex())
-
-	return WaitMinedLogs(ctx, client, signedSwap.Hash())
+	fmt.Println("signedSwap: %w", signedSwap)
+	return nil
+	//if err := client.SendTransaction(ctx, signedSwap); err != nil {
+	//	return err
+	//}
+	//
+	//fmt.Printf("交易发送成功之后的txHash: %s\n", signedSwap.Hash().Hex())
+	//return WaitMinedLogs(ctx, client, signedSwap.Hash())
 }
 
 // TokenBalance 代币余额结构
@@ -283,6 +340,61 @@ func CallDecimals(ctx context.Context, client *ethclient.Client, erc20ABI abi.AB
 	return res[len(res)-1], nil
 }
 
+// CallAllowance 查询 allowance
+func CallAllowance(ctx context.Context, client *ethclient.Client, erc20ABI abi.ABI, token, owner, spender common.Address) (*big.Int, error) {
+	data, _ := erc20ABI.Pack("allowance", owner, spender)
+	res, err := client.CallContract(ctx, ethereum.CallMsg{To: &token, Data: data}, nil)
+	if err != nil {
+		return nil, err
+	}
+	out := new(big.Int).SetBytes(res)
+	return out, nil
+}
+
+// ApplySlippage 计算滑点
+func ApplySlippage(amount *big.Int, bp int) *big.Int {
+	num := new(big.Int).Mul(amount, big.NewInt(int64(10000-bp)))
+	return new(big.Int).Div(num, big.NewInt(10000))
+}
+
+// AutoApproveXLayer 检查 allowance，如果不足则自动发送 approve 交易
+func AutoApproveXLayer(ctx context.Context, client *ethclient.Client, erc20ABI abi.ABI, tokenAddr, routerAddr, owner common.Address, privateKey *ecdsa.PrivateKey, chainID *big.Int, requiredAmount *big.Int) error {
+	// 查询当前 allowance
+	data, _ := erc20ABI.Pack("allowance", owner, routerAddr)
+	res, err := client.CallContract(ctx, ethereum.CallMsg{To: &tokenAddr, Data: data}, nil)
+	if err != nil {
+		return fmt.Errorf("查询 allowance 失败: %w", err)
+	}
+	allowance := new(big.Int).SetBytes(res)
+
+	// 如果 allowance 足够
+	if allowance.Cmp(requiredAmount) >= 0 {
+		fmt.Println("Allowance 足够，无需授权")
+		return nil
+	}
+
+	// 构造 approve 数据
+	maxUint256 := new(big.Int).Sub(new(big.Int).Exp(big.NewInt(2), big.NewInt(256), nil), big.NewInt(1))
+	approveData, _ := erc20ABI.Pack("approve", routerAddr, maxUint256)
+
+	nonce, _ := client.PendingNonceAt(ctx, owner)
+	gasPrice, _ := client.SuggestGasPrice(ctx)
+	msg := ethereum.CallMsg{From: owner, To: &tokenAddr, Data: approveData}
+	gasLimit, _ := client.EstimateGas(ctx, msg)
+	if gasLimit == 0 {
+		gasLimit = 60000
+	}
+
+	tx := types.NewTransaction(nonce, tokenAddr, big.NewInt(0), gasLimit, gasPrice, approveData)
+	signedTx, _ := types.SignTx(tx, types.NewEIP155Signer(chainID), privateKey)
+	if err := client.SendTransaction(ctx, signedTx); err != nil {
+		return fmt.Errorf("发送 approve 交易失败: %w", err)
+	}
+	fmt.Printf("已发送 approve 交易: %s\n", signedTx.Hash().Hex())
+
+	return nil
+}
+
 // WaitMinedLogs 通过订阅日志监听交易是否上链
 func WaitMinedLogs(ctx context.Context, client *ethclient.Client, txHash common.Hash) error {
 	query := ethereum.FilterQuery{}
@@ -313,21 +425,4 @@ func WaitMinedLogs(ctx context.Context, client *ethclient.Client, txHash common.
 			_ = log // 日志本身暂时不用解析
 		}
 	}
-}
-
-// CallAllowance 查询 allowance
-func CallAllowance(ctx context.Context, client *ethclient.Client, erc20ABI abi.ABI, token, owner, spender common.Address) (*big.Int, error) {
-	data, _ := erc20ABI.Pack("allowance", owner, spender)
-	res, err := client.CallContract(ctx, ethereum.CallMsg{To: &token, Data: data}, nil)
-	if err != nil {
-		return nil, err
-	}
-	out := new(big.Int).SetBytes(res)
-	return out, nil
-}
-
-// ApplySlippage 计算滑点
-func ApplySlippage(amount *big.Int, bp int) *big.Int {
-	num := new(big.Int).Mul(amount, big.NewInt(int64(10000-bp)))
-	return new(big.Int).Div(num, big.NewInt(10000))
 }
