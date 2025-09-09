@@ -19,6 +19,15 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 )
 
+// ERC20ABI 最小子集
+const ERC20ABI = `[{"constant":true,"inputs":[{"name":"owner","type":"address"}],"name":"balanceOf","outputs":[{"name":"","type":"uint256"}],"type":"function"},
+{"constant":true,"inputs":[{"name":"owner","type":"address"},{"name":"spender","type":"address"}],"name":"allowance","outputs":[{"name":"","type":"uint256"}],"type":"function"},
+{"constant":false,"inputs":[{"name":"spender","type":"address"},{"name":"value","type":"uint256"}],"name":"approve","outputs":[{"name":"","type":"bool"}],"type":"function"}]`
+
+// RouterABI 最小子集（UniswapV2 风格）
+const RouterABI = `[{"constant":true,"inputs":[{"name":"amountIn","type":"uint256"},{"name":"path","type":"address[]"}],"name":"getAmountsOut","outputs":[{"name":"","type":"uint256[]"}],"type":"function"},
+{"constant":false,"inputs":[{"name":"amountIn","type":"uint256"},{"name":"amountOutMin","type":"uint256"},{"name":"path","type":"address[]"},{"name":"to","type":"address"},{"name":"deadline","type":"uint256"}],"name":"swapExactTokensForTokens","outputs":[{"name":"amounts","type":"uint256[]"}],"type":"function"}]`
+
 var cfg = struct {
 	TokenAddr  string
 	OkbAddr    string
@@ -112,25 +121,25 @@ func SwapTokens(ctx context.Context, client *ethclient.Client, cfg TradeInfo, to
 		return fmt.Errorf("私钥推导公钥失败，交易失败")
 	}
 	from := crypto.PubkeyToAddress(*pubKeyECDSA)
-
-	fmt.Println("钱包地址", from)
+	fmt.Println("Derived wallet address:", from.Hex())
 
 	erc20ABI, _ := abi.JSON(strings.NewReader(ERC20ABI))
 	routerABI, _ := abi.JSON(strings.NewReader(RouterABI))
 
-	// 1. 获取代币精度 & 余额
+	// 1. 获取代币精度&余额 okb精度&余额
 	decimals, err := CallDecimals(ctx, client, erc20ABI, tokenIn)
 	if err != nil {
 		return fmt.Errorf("获取代币精度失败: %w", err)
 	}
 	amountIn := ToWeiFloat(amountHuman, int(decimals))
 
-	tokenBal, err := CallBalanceOf(ctx, client, erc20ABI, tokenIn, from)
+	// 获取okb余额
+	balanceOKB, err := client.BalanceAt(ctx, from, nil)
 	if err != nil {
 		return err
 	}
-	if amountIn.Cmp(tokenBal) > 0 {
-		return fmt.Errorf("交易金额大于账户余额", tokenBal, amountIn)
+	if amountIn.Cmp(balanceOKB) > 0 {
+		return fmt.Errorf("交易金额大于账户余额", balanceOKB, amountIn)
 	}
 
 	// 2. allowance 授权检查 授权Router可以提取足够代币
@@ -146,13 +155,8 @@ func SwapTokens(ctx context.Context, client *ethclient.Client, cfg TradeInfo, to
 		// approve gasLimit 比较固定为80000gas 这里也可以作为配置项
 		gasLimit := uint64(80000)
 
-		// 检查 ETH 余额是否足够支付手续费
-		balanceEth, err := client.BalanceAt(ctx, from, nil)
-		if err != nil {
-			return fmt.Errorf("获取ETH余额失败: %w", err)
-		}
-		requiredEth := new(big.Int).Mul(new(big.Int).SetUint64(gasLimit), gasPrice)
-		if balanceEth.Cmp(requiredEth) < 0 {
+		requiredOKB := new(big.Int).Mul(new(big.Int).SetUint64(gasLimit), gasPrice)
+		if balanceOKB.Cmp(requiredOKB) < 0 {
 			return fmt.Errorf("ETH费用少于Approve需要认证的费用")
 		}
 
@@ -194,37 +198,68 @@ func SwapTokens(ctx context.Context, client *ethclient.Client, cfg TradeInfo, to
 		gasLimit = 300000
 	}
 
-	// 检查 ETH 余额是否足够支付手续费
-	balanceEth, err := client.BalanceAt(ctx, from, nil)
-	if err != nil {
-		return fmt.Errorf("获取ETH余额失败: %w", err)
-	}
-	requiredEth := new(big.Int).Mul(new(big.Int).SetUint64(gasLimit), gasPrice)
-	if balanceEth.Cmp(requiredEth) < 0 {
+	// 检查OKB余额是否足够支付手续费
+	requiredOKB := new(big.Int).Mul(new(big.Int).SetUint64(gasLimit), gasPrice)
+	if balanceOKB.Cmp(requiredOKB) < 0 {
 		return fmt.Errorf("账户余额不足以支付gas费用")
 	}
 
-	return nil
+	swapTx := types.NewTransaction(nonce, cfg.RouterAddr, big.NewInt(0), gasLimit, gasPrice, swapData)
+	signedSwap, _ := types.SignTx(swapTx, types.NewEIP155Signer(cfg.ChainID), cfg.PrivateKey)
 
-	//swapTx := types.NewTransaction(nonce, cfg.RouterAddr, big.NewInt(0), gasLimit, gasPrice, swapData)
-	//signedSwap, _ := types.SignTx(swapTx, types.NewEIP155Signer(cfg.ChainID), cfg.PrivateKey)
-	//
-	//if err := client.SendTransaction(ctx, signedSwap); err != nil {
-	//	return err
-	//}
-	//fmt.Printf("交易发送成功之后的txHash: %s\n", signedSwap.Hash().Hex())
-	//
-	//return WaitMinedLogs(ctx, client, signedSwap.Hash())
+	if err := client.SendTransaction(ctx, signedSwap); err != nil {
+		return err
+	}
+	fmt.Printf("交易发送成功之后的txHash: %s\n", signedSwap.Hash().Hex())
+
+	return WaitMinedLogs(ctx, client, signedSwap.Hash())
 }
 
-// ERC20ABI 最小子集
-const ERC20ABI = `[{"constant":true,"inputs":[{"name":"owner","type":"address"}],"name":"balanceOf","outputs":[{"name":"","type":"uint256"}],"type":"function"},
-{"constant":true,"inputs":[{"name":"owner","type":"address"},{"name":"spender","type":"address"}],"name":"allowance","outputs":[{"name":"","type":"uint256"}],"type":"function"},
-{"constant":false,"inputs":[{"name":"spender","type":"address"},{"name":"value","type":"uint256"}],"name":"approve","outputs":[{"name":"","type":"bool"}],"type":"function"}]`
+// TokenBalance 代币余额结构
+type TokenBalance struct {
+	Amount   *big.Int // 余额（原始整数，未除以精度）
+	Decimals int      // 代币精度
+}
 
-// RouterABI 最小子集（UniswapV2 风格）
-const RouterABI = `[{"constant":true,"inputs":[{"name":"amountIn","type":"uint256"},{"name":"path","type":"address[]"}],"name":"getAmountsOut","outputs":[{"name":"","type":"uint256[]"}],"type":"function"},
-{"constant":false,"inputs":[{"name":"amountIn","type":"uint256"},{"name":"amountOutMin","type":"uint256"},{"name":"path","type":"address[]"},{"name":"to","type":"address"},{"name":"deadline","type":"uint256"}],"name":"swapExactTokensForTokens","outputs":[{"name":"amounts","type":"uint256[]"}],"type":"function"}]`
+// GetWalletBalances 查询钱包的原生币(OKB)和指定代币余额
+func GetWalletBalances(ctx context.Context, client *ethclient.Client, owner common.Address, tokens map[string]common.Address) (map[string]TokenBalance, error) {
+	balances := make(map[string]TokenBalance)
+
+	// 1. 查询原生 OKB (链上的 ETH)
+	balEth, err := client.BalanceAt(ctx, owner, nil)
+	if err != nil {
+		return nil, fmt.Errorf("查询原生OKB失败: %w", err)
+	}
+	balances["OKB"] = TokenBalance{
+		Amount:   balEth,
+		Decimals: 18, // OKB 作为原生币，固定18位
+	}
+
+	// 2. 查询 ERC20 代币
+	erc20ABI, _ := abi.JSON(strings.NewReader(ERC20ABI))
+	for name, tokenAddr := range tokens {
+		// balanceOf
+		data, _ := erc20ABI.Pack("balanceOf", owner)
+		res, err := client.CallContract(ctx, ethereum.CallMsg{To: &tokenAddr, Data: data}, nil)
+		if err != nil {
+			balances[name] = TokenBalance{Amount: big.NewInt(0), Decimals: 18}
+			continue
+		}
+		bal := new(big.Int).SetBytes(res)
+
+		// decimals
+		dataDec, _ := erc20ABI.Pack("decimals")
+		resDec, err := client.CallContract(ctx, ethereum.CallMsg{To: &tokenAddr, Data: dataDec}, nil)
+		decimals := 18
+		if err == nil && len(resDec) > 0 {
+			decimals = int(resDec[len(resDec)-1])
+		}
+
+		balances[name] = TokenBalance{Amount: bal, Decimals: decimals}
+	}
+
+	return balances, nil
+}
 
 // ToWeiFloat 把人类可读的代币数量转成最小单位
 func ToWeiFloat(amount float64, decimals int) *big.Int {
@@ -278,22 +313,6 @@ func WaitMinedLogs(ctx context.Context, client *ethclient.Client, txHash common.
 			_ = log // 日志本身暂时不用解析
 		}
 	}
-}
-
-// CallBalanceOf 查询代币余额
-func CallBalanceOf(ctx context.Context, client *ethclient.Client, erc20ABI abi.ABI, token, owner common.Address) (*big.Int, error) {
-	data, _ := erc20ABI.Pack("balanceOf", owner)
-	res, err := client.CallContract(ctx, ethereum.CallMsg{To: &token, Data: data}, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var out *big.Int
-	if err := erc20ABI.UnpackIntoInterface(&out, "balanceOf", res); err != nil {
-		return nil, err
-	}
-	fmt.Printf("balance of %s is %s\n", token.Hex(), out.String())
-	return out, nil
 }
 
 // CallAllowance 查询 allowance
