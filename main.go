@@ -4,18 +4,19 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"fmt"
-	"github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/accounts/abi"
-	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/ethclient"
 	"log"
 	"math"
 	"math/big"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/ethclient"
 )
 
 var cfg = struct {
@@ -112,6 +113,8 @@ func SwapTokens(ctx context.Context, client *ethclient.Client, cfg TradeInfo, to
 	}
 	from := crypto.PubkeyToAddress(*pubKeyECDSA)
 
+	fmt.Println("钱包地址", from)
+
 	erc20ABI, _ := abi.JSON(strings.NewReader(ERC20ABI))
 	routerABI, _ := abi.JSON(strings.NewReader(RouterABI))
 
@@ -127,7 +130,7 @@ func SwapTokens(ctx context.Context, client *ethclient.Client, cfg TradeInfo, to
 		return err
 	}
 	if amountIn.Cmp(tokenBal) > 0 {
-		return fmt.Errorf("交易金额大于账户余额")
+		return fmt.Errorf("交易金额大于账户余额", tokenBal, amountIn)
 	}
 
 	// 2. allowance 授权检查 授权Router可以提取足够代币
@@ -284,7 +287,12 @@ func CallBalanceOf(ctx context.Context, client *ethclient.Client, erc20ABI abi.A
 	if err != nil {
 		return nil, err
 	}
-	out := new(big.Int).SetBytes(res)
+
+	var out *big.Int
+	if err := erc20ABI.UnpackIntoInterface(&out, "balanceOf", res); err != nil {
+		return nil, err
+	}
+	fmt.Printf("balance of %s is %s\n", token.Hex(), out.String())
 	return out, nil
 }
 
