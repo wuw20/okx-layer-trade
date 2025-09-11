@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/ecdsa"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -19,12 +20,11 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 )
 
-// ERC20ABI 最小子集
 const ERC20ABI = `[{"constant":true,"inputs":[{"name":"owner","type":"address"}],"name":"balanceOf","outputs":[{"name":"","type":"uint256"}],"type":"function"},
 {"constant":true,"inputs":[{"name":"owner","type":"address"},{"name":"spender","type":"address"}],"name":"allowance","outputs":[{"name":"","type":"uint256"}],"type":"function"},
-{"constant":false,"inputs":[{"name":"spender","type":"address"},{"name":"value","type":"uint256"}],"name":"approve","outputs":[{"name":"","type":"bool"}],"type":"function"}]`
+{"constant":false,"inputs":[{"name":"spender","type":"address"},{"name":"value","type":"uint256"}],"name":"approve","outputs":[{"name":"","type":"bool"}],"type":"function"},
+{"constant":true,"inputs":[],"name":"decimals","outputs":[{"name":"","type":"uint8"}],"type":"function"}]`
 
-// RouterABI 最小子集
 const RouterABI = `[{
   "constant": true,
   "inputs": [
@@ -59,10 +59,38 @@ const RouterABI = `[{
     {"name":"to","type":"address"},
     {"name":"deadline","type":"uint256"}
   ],
+  "name":"swapExactTokensForETH",
+  "outputs":[{"name":"amounts","type":"uint256[]"}],
+  "type":"function"
+},
+{
+  "constant": false,
+  "inputs": [
+    {"name":"amountIn","type":"uint256"},
+    {"name":"amountOutMin","type":"uint256"},
+    {"name":"path","type":"address[]"},
+    {"name":"to","type":"address"},
+    {"name":"deadline","type":"uint256"}
+  ],
   "name":"swapExactTokensForTokens",
   "outputs":[{"name":"amounts","type":"uint256[]"}],
   "type":"function"
 }]`
+
+const UsdtAddr = "0x73fac6a72bdbd1c8f2b7c1c6a64d890c66f3f64e"
+
+const FactoryABI = `[{"constant":true,"inputs":[{"name":"tokenA","type":"address"},{"name":"tokenB","type":"address"}],
+"name":"getPair","outputs":[{"name":"","type":"address"}],"stateMutability":"view","type":"function"}]`
+
+const pairABIJSON = `[
+		{"constant":true,"inputs":[],"name":"token0","outputs":[{"name":"","type":"address"}],"type":"function"},
+		{"constant":true,"inputs":[],"name":"token1","outputs":[{"name":"","type":"address"}],"type":"function"},
+		{"constant":true,"inputs":[],"name":"getReserves","outputs":[
+			{"name":"reserve0","type":"uint112"},
+			{"name":"reserve1","type":"uint112"},
+			{"name":"blockTimestampLast","type":"uint32"}
+		],"type":"function"}
+	]`
 
 var cfg = struct {
 	TokenAddr   string
@@ -76,42 +104,36 @@ var cfg = struct {
 	amount      string
 	AutoApprove bool
 }{
-	TokenAddr:   "0x0cc24c51bf89c00c5affbfcf5e856c25ecbdb48e",                         // XDOG代币地址
-	OkbAddr:     "0xe538905cf8410324e03a5a23c1c177a474d59b2b",                         // wOkb地址
-	RouterAddr:  "0xcc6C3FB4a9Dc710c4a187D2c5CD032c7F5086f0a",                         // xlayer router地址
-	ChainID:     196,                                                                  // x layer
-	SlippageBP:  50,                                                                   // 设置的滑点
-	Deadline:    30,                                                                   // 超时时间30s
-	PrivateKey:  "0x623f230c83b4343cd0e2423a6114ca4e8a16b57f596b9ab229cbc1d9e077b7fc", // okx申请的私钥
-	opType:      "buy",                                                                // 交易类型
-	amount:      "0.0000001",                                                          // 交易金额
+	TokenAddr:   "0x0cc24c51bf89c00c5affbfcf5e856c25ecbdb48e",
+	OkbAddr:     "0xe538905cf8410324e03a5a23c1c177a474d59b2b",
+	RouterAddr:  "0x69C236E021F5775B0D0328ded5EaC708E3B869DF",
+	ChainID:     196,
+	SlippageBP:  50,
+	Deadline:    30,
+	PrivateKey:  "0x623f230c83b4343cd0e2423a6114ca4e8a16b57f596b9ab229cbc1d9e077b7fc",
+	opType:      "buy",
+	amount:      "0.00001",
 	AutoApprove: false,
 }
 
-// TradeInfo 交易入参
 type TradeInfo struct {
-	PrivateKey  *ecdsa.PrivateKey // 钱包私钥
-	TokenAddr   common.Address    // 代币地址
-	OkbAddr     common.Address    // okb地址
-	RouterAddr  common.Address    // router地址
-	ChainID     *big.Int          // x layer地址
-	SlippageBP  int               // 滑点
-	Deadline    time.Duration     // 超时时间
-	AutoApprove bool              // 是否开启授权
+	PrivateKey  *ecdsa.PrivateKey
+	TokenAddr   common.Address
+	OkbAddr     common.Address
+	RouterAddr  common.Address
+	ChainID     *big.Int
+	SlippageBP  int
+	Deadline    time.Duration
+	AutoApprove bool
 }
 
 func main() {
-
-	// 连接 RPC 节点
 	ctx := context.Background()
 	client, err := ethclient.DialContext(ctx, "https://xlayerrpc.okx.com")
 	if err != nil {
-		log.Fatal("连接 RPC 失败:", err)
+		log.Fatal("连接RPC失败:", err)
 	}
-	fmt.Println("已连接到 X Layer 节点")
 
-	// 打印操作信息
-	// 根据操作类型选择路径
 	tokenAddrCommon := common.HexToAddress(cfg.TokenAddr)
 	okbAddrCommon := common.HexToAddress(cfg.OkbAddr)
 
@@ -119,21 +141,20 @@ func main() {
 	if cfg.opType == "sell" {
 		tokenIn = tokenAddrCommon
 		tokenOut = okbAddrCommon
-	} else { // buy
+	} else {
 		tokenIn = okbAddrCommon
 		tokenOut = tokenAddrCommon
 	}
 
-	// 加载私钥
 	privateKey, err := crypto.HexToECDSA(strings.TrimPrefix(cfg.PrivateKey, "0x"))
 	if err != nil {
 		log.Fatalf("私钥解析失败: %v", err)
 	}
 
-	sellCfg := TradeInfo{
+	tradeCfg := TradeInfo{
 		PrivateKey:  privateKey,
-		TokenAddr:   common.HexToAddress(cfg.TokenAddr),
-		OkbAddr:     common.HexToAddress(cfg.OkbAddr),
+		TokenAddr:   tokenAddrCommon,
+		OkbAddr:     okbAddrCommon,
 		RouterAddr:  common.HexToAddress(cfg.RouterAddr),
 		ChainID:     big.NewInt(cfg.ChainID),
 		SlippageBP:  cfg.SlippageBP,
@@ -141,288 +162,463 @@ func main() {
 		AutoApprove: cfg.AutoApprove,
 	}
 
-	// 输入金额转化
 	amount, err := strconv.ParseFloat(cfg.amount, 64)
-	// 调用 SwapTokens
-	err = SwapTokens(ctx, client, sellCfg, tokenIn, tokenOut, amount)
 	if err != nil {
-		log.Fatalf("交易执行失败: %v", err)
+		log.Fatalf("金额解析失败: %v", err)
 	}
-	fmt.Println("交易执行完成。")
+
+	txHash, err := SwapTokens(ctx, client, tradeCfg, tokenIn, tokenOut, amount)
+	if err != nil {
+		log.Fatalf("交易执行失败: %v, 交易哈希: %s", err, txHash.Hex())
+	}
+	fmt.Println("交易执行完成")
 }
 
-// SwapTokens 将输入代币兑换成输出代币
-// 参数 amountHuman 表示人类可读的输入代币数量
-func SwapTokens(ctx context.Context, client *ethclient.Client, cfg TradeInfo, tokenIn, tokenOut common.Address, amountHuman float64) error {
+func DebugPath(amountIn *big.Int, decimals int, path []common.Address) {
+	fmt.Println("调试: getAmountsOut 调用参数")
+	fmt.Printf("输入金额 (人类可读): %s\n", ToHuman(amountIn, decimals))
+	for i, addr := range path {
+		fmt.Printf("路径[%d]: %s\n", i, addr.Hex())
+	}
+}
 
-	// 私钥验证
+func SwapTokens(ctx context.Context, client *ethclient.Client, cfg TradeInfo, tokenIn, tokenOut common.Address, amountHuman float64) (common.Hash, error) {
 	pubKey := cfg.PrivateKey.Public()
 	pubKeyECDSA, ok := pubKey.(*ecdsa.PublicKey)
 	if !ok {
-		return fmt.Errorf("私钥推导公钥失败，交易失败")
+		return common.Hash{}, fmt.Errorf("私钥推导公钥失败")
 	}
 	from := crypto.PubkeyToAddress(*pubKeyECDSA)
-	fmt.Println("Derived wallet address:", from.Hex())
+	fmt.Println("钱包地址:", from.Hex())
 
-	erc20ABI, _ := abi.JSON(strings.NewReader(ERC20ABI))
-	routerABI, _ := abi.JSON(strings.NewReader(RouterABI))
+	erc20ABI, err := abi.JSON(strings.NewReader(ERC20ABI))
+	if err != nil {
+		return common.Hash{}, fmt.Errorf("解析ERC20 ABI失败: %w", err)
+	}
 
-	// 1. 获取代币精度&余额 okb精度&余额
+	routerABI, err := abi.JSON(strings.NewReader(RouterABI))
+	if err != nil {
+		return common.Hash{}, fmt.Errorf("解析Router ABI失败: %w", err)
+	}
+
+	// 打印Router ABI方法列表用于调试
+	fmt.Println("Router ABI方法:")
+	for name := range routerABI.Methods {
+		fmt.Printf("- %s\n", name)
+	}
+
 	decimals, err := CallDecimals(ctx, client, erc20ABI, tokenIn)
 	if err != nil {
-		return fmt.Errorf("获取代币精度失败: %w", err)
+		return common.Hash{}, fmt.Errorf("获取代币精度失败: %w", err)
 	}
 	amountIn := ToWeiFloat(amountHuman, int(decimals))
 
-	// 获取okb余额
-	balanceOKB, err := client.BalanceAt(ctx, from, nil)
+	balance, err := client.BalanceAt(ctx, from, nil)
 	if err != nil {
-		return err
-	}
-	if amountIn.Cmp(balanceOKB) > 0 {
-		return fmt.Errorf("交易金额大于账户余额: %w, %w", balanceOKB, amountIn)
+		return common.Hash{}, fmt.Errorf("获取余额失败: %w", err)
 	}
 
-	// 2. allowance 授权检查 授权Router可以提取足够代币
-	allowance, _ := CallAllowance(ctx, client, erc20ABI, tokenIn, from, cfg.RouterAddr)
-	nonce, _ := client.PendingNonceAt(ctx, from)
+	if tokenIn == cfg.OkbAddr && amountIn.Cmp(balance) > 0 {
+		return common.Hash{}, fmt.Errorf("OKB余额不足: 需要 %s, 实际 %s", amountIn.String(), balance.String())
+	}
 
-	if allowance.Cmp(amountIn) < 0 {
-		if cfg.AutoApprove {
-			if err := AutoApproveXLayer(ctx, client, erc20ABI, tokenIn, cfg.RouterAddr, from, cfg.PrivateKey, cfg.ChainID, amountIn); err != nil {
-				return err
+	_, err = client.PendingNonceAt(ctx, from)
+	if err != nil {
+		return common.Hash{}, fmt.Errorf("获取nonce失败: %w", err)
+	}
+
+	// 授权approve
+	if tokenIn != cfg.OkbAddr {
+		allowance, err := CallAllowance(ctx, client, erc20ABI, tokenIn, from, cfg.RouterAddr)
+		if err != nil {
+			return common.Hash{}, fmt.Errorf("查询授权失败: %w", err)
+		}
+
+		if allowance.Cmp(amountIn) < 0 {
+			if cfg.AutoApprove {
+				if err := AutoApproveXLayer(ctx, client, erc20ABI, tokenIn, cfg.RouterAddr, from, cfg.PrivateKey, cfg.ChainID, amountIn); err != nil {
+					return common.Hash{}, fmt.Errorf("自动授权失败: %w", err)
+				}
+				_, err = client.PendingNonceAt(ctx, from)
+				if err != nil {
+					return common.Hash{}, fmt.Errorf("更新nonce失败: %w", err)
+				}
+			} else {
+				return common.Hash{}, fmt.Errorf("授权不足: 需要 %s, 实际 %s", amountIn.String(), allowance.String())
 			}
-			nonce, _ = client.PendingNonceAt(ctx, from) // 更新 nonce
-		} else {
-			return fmt.Errorf("需要交易的金额大于授权Router可提取的金额: allowance=%s, amountIn=%s", allowance.String(), amountIn.String())
 		}
 	}
 
-	// 3. 获取 amountOutMin 交易滑点
-	path := []common.Address{tokenIn, tokenOut}
-	fmt.Printf("Calling getAmountsOut, amountIn=%s, path=%v\n", amountIn.String(), path)
+	factoryAddr := common.HexToAddress("0xf1cbfb1b12408dedba6dcd7bb57730baef6584fb")
+	pairAddr, err := GetPairAddress(ctx, client, factoryAddr, tokenIn, tokenOut)
+	fmt.Println("获取到的pair地址:", pairAddr.Hex())
+	if err := InspectPair(ctx, client, pairAddr); err != nil {
+		log.Fatal("检查 Pair 失败: ", err)
+	}
 
-	getOutData, _ := routerABI.Pack("getAmountsOut", amountIn, path)
+	path := []common.Address{tokenIn, tokenOut}
+	DebugPath(amountIn, int(decimals), path)
+
+	// 检查直连池子是否存在
+	err = CheckLiquidityPool(ctx, client, routerABI, cfg.RouterAddr, path)
+	if err == nil {
+		fmt.Printf("使用直连池子路径: %s -> %s\n", tokenIn.Hex(), tokenOut.Hex())
+	}
+
+	// 打印路径信息用于调试
+	fmt.Printf("交易路径: ")
+	for i, p := range path {
+		if i > 0 {
+			fmt.Print(" -> ")
+		}
+		fmt.Print(p.Hex())
+	}
+	fmt.Println()
+	fmt.Printf("输入金额: %s (小数位: %d)\n", amountIn.String(), decimals)
+
+	getOutData, err := routerABI.Pack("getAmountsOut", amountIn, path)
+	if err != nil {
+		return common.Hash{}, fmt.Errorf("打包getAmountsOut失败: %w", err)
+	}
+
+	// 打印调用数据用于调试
+	fmt.Printf("调用数据: %x\n", getOutData)
+	fmt.Printf("调用Router: %s\n", cfg.RouterAddr.Hex())
+
+	code, err := client.CodeAt(ctx, cfg.RouterAddr, nil)
+	if err != nil {
+		fmt.Printf("获取Router合约代码失败: %s\n", err)
+	}
+
+	if len(code) == 0 {
+		fmt.Printf("Router地址 %s 上没有部署合约", cfg.RouterAddr.Hex())
+	}
+
 	out, err := client.CallContract(ctx, ethereum.CallMsg{To: &cfg.RouterAddr, Data: getOutData}, nil)
 	if err != nil {
-		return fmt.Errorf("call getAmountsOut failed: %w", err)
+		fmt.Printf("CallContract错误详情: %v\n", err)
+		return common.Hash{}, fmt.Errorf("调用getAmountsOut失败: %w", err)
 	}
-	if len(out) == 0 {
-		return fmt.Errorf("getAmountsOut 返回为空，请检查 Router 地址或交易对是否存在流动性")
+
+	if out == nil {
+		fmt.Println("警告: CallContract返回nil")
+		return common.Hash{}, fmt.Errorf("getAmountsOut返回空数据")
 	}
+
+	// 打印原始返回数据
+	fmt.Printf("原始返回数据: %x\n", out)
 
 	var amounts []*big.Int
 	err = routerABI.UnpackIntoInterface(&amounts, "getAmountsOut", out)
 	if err != nil {
-		return fmt.Errorf("解包失败: %v", err)
+		return common.Hash{}, fmt.Errorf("解析getAmountsOut结果失败: %w", err)
 	}
 	if len(amounts) < 2 {
-		return fmt.Errorf("向router获取交易费用为空")
+		return common.Hash{}, fmt.Errorf("无效的报价结果")
 	}
-	amountOut := amounts[1]
-
-	// 计算滑点
+	amountOut := amounts[len(amounts)-1]
 	amountOutMin := ApplySlippage(amountOut, cfg.SlippageBP)
 
-	// 4. 构造 swap 交易
-	deadline := big.NewInt(time.Now().Add(cfg.Deadline).Unix())
+	fmt.Printf("滑点: %d BP (%.2f%%)\n", cfg.SlippageBP, float64(cfg.SlippageBP)/100.0)
 
+	deadline := big.NewInt(time.Now().Add(cfg.Deadline).Unix())
 	var swapData []byte
-	if tokenIn == cfg.OkbAddr {
-		// 用原生OKB买代币
-		swapData, _ = routerABI.Pack("swapExactETHForTokens", amountOutMin, path, from, deadline)
-	} else if tokenOut == cfg.OkbAddr {
-		// 卖代币换原生OKB
-		swapData, _ = routerABI.Pack("swapExactTokensForETH", amountIn, amountOutMin, path, from, deadline)
-	} else {
-		// 代币之间互换
-		swapData, _ = routerABI.Pack("swapExactTokensForTokens", amountIn, amountOutMin, path, from, deadline)
+
+	switch {
+	case tokenIn == cfg.OkbAddr:
+		swapData, err = routerABI.Pack("swapExactETHForTokens", amountOutMin, path, from, deadline)
+	case tokenOut == cfg.OkbAddr:
+		swapData, err = routerABI.Pack("swapExactTokensForETH", amountIn, amountOutMin, path, from, deadline)
+	default:
+		swapData, err = routerABI.Pack("swapExactTokensForTokens", amountIn, amountOutMin, path, from, deadline)
+	}
+	if err != nil {
+		return common.Hash{}, fmt.Errorf("构造交易数据失败: %w", err)
 	}
 
-	msg := ethereum.CallMsg{From: from, To: &cfg.RouterAddr, Data: swapData}
+	msg := ethereum.CallMsg{
+		From: from,
+		To:   &cfg.RouterAddr,
+		Data: swapData,
+	}
+	if tokenIn == cfg.OkbAddr {
+		msg.Value = amountIn
+	}
+
 	gasLimit, err := client.EstimateGas(ctx, msg)
 	if err != nil {
-		gasLimit = 300000
+		gasLimit = 500000
 	}
 
-	// 检查OKB余额是否足够支付手续费
-	// 建议gas费用
-	gasPrice, _ := client.SuggestGasPrice(ctx)
-	requiredOKB := new(big.Int).Mul(new(big.Int).SetUint64(gasLimit), gasPrice)
-	if balanceOKB.Cmp(requiredOKB) < 0 {
-		return fmt.Errorf("账户余额不足以支付gas费用")
+	gasPrice, err := client.SuggestGasPrice(ctx)
+	if err != nil {
+		return common.Hash{}, fmt.Errorf("获取Gas价格失败: %w", err)
 	}
 
-	var txValue *big.Int
-	if tokenIn == cfg.OkbAddr {
-		txValue = amountIn
-	} else {
-		txValue = big.NewInt(0)
+	requiredGas := new(big.Int).Mul(gasPrice, big.NewInt(int64(gasLimit)))
+	if balance.Cmp(requiredGas) < 0 {
+		return common.Hash{}, fmt.Errorf("gas费不足: 需要 %s OKB", ToHuman(requiredGas, 18))
 	}
-	swapTx := types.NewTransaction(nonce, cfg.RouterAddr, txValue, gasLimit, gasPrice, swapData)
-	signedSwap, _ := types.SignTx(swapTx, types.NewEIP155Signer(cfg.ChainID), cfg.PrivateKey)
 
-	fmt.Println("signedSwap: %w", signedSwap)
-	return nil
-	//if err := client.SendTransaction(ctx, signedSwap); err != nil {
-	//	return err
+	return common.Hash{}, nil
+	//var txValue *big.Int
+	//if tokenIn == cfg.OkbAddr {
+	//	txValue = amountIn
+	//} else {
+	//	txValue = big.NewInt(0)
 	//}
 	//
-	//fmt.Printf("交易发送成功之后的txHash: %s\n", signedSwap.Hash().Hex())
-	//return WaitMinedLogs(ctx, client, signedSwap.Hash())
+	//swapTx := types.NewTransaction(nonce, cfg.RouterAddr, txValue, gasLimit, gasPrice, swapData)
+	//signedSwap, err := types.SignTx(swapTx, types.NewEIP155Signer(cfg.ChainID), cfg.PrivateKey)
+	//if err != nil {
+	//	return common.Hash{}, fmt.Errorf("交易签名失败: %w", err)
+	//}
+	//
+	//fmt.Printf("已签名交易: %v\n", signedSwap)
+	//
+	//if err := client.SendTransaction(ctx, signedSwap); err != nil {
+	//	return signedSwap.Hash(), fmt.Errorf("发送交易失败: %w", err)
+	//}
+	//
+	//fmt.Printf("交易已发送: %s\n", signedSwap.Hash().Hex())
+	//if err := WaitMinedLogs(ctx, client, signedSwap.Hash()); err != nil {
+	//	return signedSwap.Hash(), err
+	//}
+	//return signedSwap.Hash(), nil
 }
 
-// TokenBalance 代币余额结构
-type TokenBalance struct {
-	Amount   *big.Int // 余额（原始整数，未除以精度）
-	Decimals int      // 代币精度
-}
-
-// GetWalletBalances 查询钱包的原生币(OKB)和指定代币余额
-func GetWalletBalances(ctx context.Context, client *ethclient.Client, owner common.Address, tokens map[string]common.Address) (map[string]TokenBalance, error) {
-	balances := make(map[string]TokenBalance)
-
-	// 1. 查询原生 OKB (链上的 ETH)
-	balEth, err := client.BalanceAt(ctx, owner, nil)
+// CheckLiquidityPool 检查流动性池是否存在
+func CheckLiquidityPool(ctx context.Context, client *ethclient.Client, routerABI abi.ABI, routerAddr common.Address, path []common.Address) error {
+	// 使用最小金额测试流动性池
+	testAmount := big.NewInt(1)
+	getOutData, err := routerABI.Pack("getAmountsOut", testAmount, path)
 	if err != nil {
-		return nil, fmt.Errorf("查询原生OKB失败: %w", err)
-	}
-	balances["OKB"] = TokenBalance{
-		Amount:   balEth,
-		Decimals: 18, // OKB 作为原生币，固定18位
+		return fmt.Errorf("打包测试数据失败: %w", err)
 	}
 
-	// 2. 查询 ERC20 代币
-	erc20ABI, _ := abi.JSON(strings.NewReader(ERC20ABI))
-	for name, tokenAddr := range tokens {
-		// balanceOf
-		data, _ := erc20ABI.Pack("balanceOf", owner)
-		res, err := client.CallContract(ctx, ethereum.CallMsg{To: &tokenAddr, Data: data}, nil)
-		if err != nil {
-			balances[name] = TokenBalance{Amount: big.NewInt(0), Decimals: 18}
-			continue
-		}
-		bal := new(big.Int).SetBytes(res)
+	out, err := client.CallContract(ctx, ethereum.CallMsg{
+		To:   &routerAddr,
+		Data: getOutData,
+	}, nil)
 
-		// decimals
-		dataDec, _ := erc20ABI.Pack("decimals")
-		resDec, err := client.CallContract(ctx, ethereum.CallMsg{To: &tokenAddr, Data: dataDec}, nil)
-		decimals := 18
-		if err == nil && len(resDec) > 0 {
-			decimals = int(resDec[len(resDec)-1])
-		}
-
-		balances[name] = TokenBalance{Amount: bal, Decimals: decimals}
+	if err != nil {
+		return fmt.Errorf("流动性池检查失败: %w", err)
 	}
 
-	return balances, nil
+	if len(out) == 0 {
+		return fmt.Errorf("流动性池不存在或无效")
+	}
+
+	return nil
 }
 
-// ToWeiFloat 把人类可读的代币数量转成最小单位
 func ToWeiFloat(amount float64, decimals int) *big.Int {
-	exp := new(big.Float).SetFloat64(math.Pow10(decimals))
-	val := new(big.Float).Mul(new(big.Float).SetFloat64(amount), exp)
-	i := new(big.Int)
-	val.Int(i)
-	return i
+	base := new(big.Float).SetFloat64(math.Pow10(decimals))
+	value := new(big.Float).Mul(big.NewFloat(amount), base)
+	result := new(big.Int)
+	value.Int(result)
+	return result
 }
 
-// CallDecimals 查询 ERC20 decimals
+func ToHuman(amount *big.Int, decimals int) string {
+	base := new(big.Float).SetFloat64(math.Pow10(decimals))
+	value := new(big.Float).Quo(new(big.Float).SetInt(amount), base)
+	return value.Text('f', decimals)
+}
+
 func CallDecimals(ctx context.Context, client *ethclient.Client, erc20ABI abi.ABI, token common.Address) (uint8, error) {
-	data, _ := erc20ABI.Pack("decimals")
+	data, err := erc20ABI.Pack("decimals")
+	if err != nil {
+		return 18, err
+	}
+
 	res, err := client.CallContract(ctx, ethereum.CallMsg{To: &token, Data: data}, nil)
 	if err != nil {
 		return 18, err
 	}
-	if len(res) == 0 {
-		return 18, nil
-	}
-	return res[len(res)-1], nil
+
+	var decimals uint8
+	err = erc20ABI.UnpackIntoInterface(&decimals, "decimals", res)
+	return decimals, err
 }
 
-// CallAllowance 查询 allowance
 func CallAllowance(ctx context.Context, client *ethclient.Client, erc20ABI abi.ABI, token, owner, spender common.Address) (*big.Int, error) {
-	data, _ := erc20ABI.Pack("allowance", owner, spender)
+	data, err := erc20ABI.Pack("allowance", owner, spender)
+	if err != nil {
+		return nil, err
+	}
+
 	res, err := client.CallContract(ctx, ethereum.CallMsg{To: &token, Data: data}, nil)
 	if err != nil {
 		return nil, err
 	}
-	out := new(big.Int).SetBytes(res)
-	return out, nil
-}
 
-// ApplySlippage 计算滑点
-func ApplySlippage(amount *big.Int, bp int) *big.Int {
-	num := new(big.Int).Mul(amount, big.NewInt(int64(10000-bp)))
-	return new(big.Int).Div(num, big.NewInt(10000))
-}
-
-// AutoApproveXLayer 检查 allowance，如果不足则自动发送 approve 交易
-func AutoApproveXLayer(ctx context.Context, client *ethclient.Client, erc20ABI abi.ABI, tokenAddr, routerAddr, owner common.Address, privateKey *ecdsa.PrivateKey, chainID *big.Int, requiredAmount *big.Int) error {
-	// 查询当前 allowance
-	data, _ := erc20ABI.Pack("allowance", owner, routerAddr)
-	res, err := client.CallContract(ctx, ethereum.CallMsg{To: &tokenAddr, Data: data}, nil)
-	if err != nil {
-		return fmt.Errorf("查询 allowance 失败: %w", err)
-	}
 	allowance := new(big.Int).SetBytes(res)
+	return allowance, nil
+}
 
-	// 如果 allowance 足够
-	if allowance.Cmp(requiredAmount) >= 0 {
-		fmt.Println("Allowance 足够，无需授权")
-		return nil
+func ApplySlippage(amount *big.Int, bp int) *big.Int {
+	adjusted := new(big.Int).Mul(amount, big.NewInt(int64(10000-bp)))
+	return new(big.Int).Div(adjusted, big.NewInt(10000))
+}
+
+func AutoApproveXLayer(ctx context.Context, client *ethclient.Client, erc20ABI abi.ABI, tokenAddr, routerAddr, owner common.Address, privateKey *ecdsa.PrivateKey, chainID *big.Int, requiredAmount *big.Int) error {
+	maxUint256 := new(big.Int).Sub(new(big.Int).Exp(big.NewInt(2), big.NewInt(256), nil), big.NewInt(1))
+	approveData, err := erc20ABI.Pack("approve", routerAddr, maxUint256)
+	if err != nil {
+		return err
 	}
 
-	// 构造 approve 数据
-	maxUint256 := new(big.Int).Sub(new(big.Int).Exp(big.NewInt(2), big.NewInt(256), nil), big.NewInt(1))
-	approveData, _ := erc20ABI.Pack("approve", routerAddr, maxUint256)
+	nonce, err := client.PendingNonceAt(ctx, owner)
+	if err != nil {
+		return err
+	}
 
-	nonce, _ := client.PendingNonceAt(ctx, owner)
-	gasPrice, _ := client.SuggestGasPrice(ctx)
-	msg := ethereum.CallMsg{From: owner, To: &tokenAddr, Data: approveData}
-	gasLimit, _ := client.EstimateGas(ctx, msg)
-	if gasLimit == 0 {
+	gasPrice, err := client.SuggestGasPrice(ctx)
+	if err != nil {
+		return err
+	}
+
+	msg := ethereum.CallMsg{
+		From: owner,
+		To:   &tokenAddr,
+		Data: approveData,
+	}
+	gasLimit, err := client.EstimateGas(ctx, msg)
+	if err != nil {
 		gasLimit = 60000
 	}
 
 	tx := types.NewTransaction(nonce, tokenAddr, big.NewInt(0), gasLimit, gasPrice, approveData)
-	signedTx, _ := types.SignTx(tx, types.NewEIP155Signer(chainID), privateKey)
-	if err := client.SendTransaction(ctx, signedTx); err != nil {
-		return fmt.Errorf("发送 approve 交易失败: %w", err)
+	signedTx, err := types.SignTx(tx, types.NewEIP155Signer(chainID), privateKey)
+	if err != nil {
+		return err
 	}
-	fmt.Printf("已发送 approve 交易: %s\n", signedTx.Hash().Hex())
 
-	return nil
+	if err := client.SendTransaction(ctx, signedTx); err != nil {
+		return err
+	}
+
+	fmt.Printf("授权交易已发送: %s\n", signedTx.Hash().Hex())
+	return WaitMinedLogs(ctx, client, signedTx.Hash())
 }
 
-// WaitMinedLogs 通过订阅日志监听交易是否上链
 func WaitMinedLogs(ctx context.Context, client *ethclient.Client, txHash common.Hash) error {
-	query := ethereum.FilterQuery{}
-	logsCh := make(chan types.Log)
-	sub, err := client.SubscribeFilterLogs(ctx, query, logsCh)
-	if err != nil {
-		return fmt.Errorf("subscribe logs error: %w", err)
-	}
-	defer sub.Unsubscribe()
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
 
 	timeout := time.After(5 * time.Minute)
+	startTime := time.Now()
+
 	for {
 		select {
-		case err := <-sub.Err():
-			return fmt.Errorf("log subscription error: %w", err)
-		case <-timeout:
-			return fmt.Errorf("tx %s not confirmed in time", txHash.Hex())
-		case log := <-logsCh:
-			// 每个新日志都检查是否包含目标交易
+		case <-ticker.C:
+			waitedSeconds := int(time.Since(startTime).Seconds())
+			fmt.Printf("等待确认中... 已等候 %ds\n", waitedSeconds)
+
 			receipt, err := client.TransactionReceipt(ctx, txHash)
-			if err == nil && receipt != nil {
-				if receipt.Status == types.ReceiptStatusSuccessful {
-					fmt.Printf("Tx %s confirmed in block %d\n", txHash.Hex(), receipt.BlockNumber.Uint64())
-					return nil
-				}
-				return fmt.Errorf("tx %s failed", txHash.Hex())
+			if errors.Is(err, ethereum.NotFound) {
+				continue
 			}
-			_ = log // 日志本身暂时不用解析
+			if err != nil {
+				return err
+			}
+
+			if receipt.Status == types.ReceiptStatusSuccessful {
+				fmt.Printf("交易已确认: 区块 %d\n", receipt.BlockNumber.Uint64())
+				return nil
+			}
+			return fmt.Errorf("交易失败: 状态码 %d", receipt.Status)
+
+		case <-timeout:
+			return fmt.Errorf("交易确认超时")
 		}
 	}
+}
+
+func GetPairAddress(ctx context.Context, client *ethclient.Client, factoryAddr, tokenA, tokenB common.Address) (common.Address, error) {
+	parsedABI, err := abi.JSON(strings.NewReader(FactoryABI))
+	if err != nil {
+		return common.Address{}, err
+	}
+
+	data, err := parsedABI.Pack("getPair", tokenA, tokenB)
+	if err != nil {
+		return common.Address{}, err
+	}
+
+	out, err := client.CallContract(ctx, ethereum.CallMsg{To: &factoryAddr, Data: data}, nil)
+	if err != nil {
+		return common.Address{}, err
+	}
+
+	var pair common.Address
+	err = parsedABI.UnpackIntoInterface(&pair, "getPair", out)
+	return pair, err
+}
+
+func InspectPair(ctx context.Context, client *ethclient.Client, pairAddr common.Address) error {
+
+	pairABI, err := abi.JSON(strings.NewReader(pairABIJSON))
+	if err != nil {
+		return fmt.Errorf("解析Pair ABI失败: %w", err)
+	}
+
+	// 调用 token0
+	token0Data, err := pairABI.Pack("token0")
+	if err != nil {
+		return fmt.Errorf("打包token0调用失败: %w", err)
+	}
+	token0Res, err := client.CallContract(ctx, ethereum.CallMsg{To: &pairAddr, Data: token0Data}, nil)
+	if err != nil {
+		return fmt.Errorf("调用token0失败: %w", err)
+	}
+	var token0 common.Address
+	err = pairABI.UnpackIntoInterface(&token0, "token0", token0Res)
+	if err != nil {
+		return fmt.Errorf("解析token0返回失败: %w", err)
+	}
+
+	// 调用 token1
+	token1Data, err := pairABI.Pack("token1")
+	if err != nil {
+		return fmt.Errorf("打包token1调用失败: %w", err)
+	}
+	token1Res, err := client.CallContract(ctx, ethereum.CallMsg{To: &pairAddr, Data: token1Data}, nil)
+	if err != nil {
+		return fmt.Errorf("调用token1失败: %w", err)
+	}
+	var token1 common.Address
+	err = pairABI.UnpackIntoInterface(&token1, "token1", token1Res)
+	if err != nil {
+		return fmt.Errorf("解析token1返回失败: %w", err)
+	}
+
+	// 调用 getReserves
+	getReservesData, err := pairABI.Pack("getReserves")
+	if err != nil {
+		return fmt.Errorf("打包getReserves调用失败: %w", err)
+	}
+	reservesRes, err := client.CallContract(ctx, ethereum.CallMsg{To: &pairAddr, Data: getReservesData}, nil)
+	if err != nil {
+		return fmt.Errorf("调用getReserves失败: %w", err)
+	}
+	var reserves struct {
+		Reserve0           *big.Int
+		Reserve1           *big.Int
+		BlockTimestampLast uint32
+	}
+	err = pairABI.UnpackIntoInterface(&reserves, "getReserves", reservesRes)
+	if err != nil {
+		return fmt.Errorf("解析getReserves返回失败: %w", err)
+	}
+
+	fmt.Printf("Pair地址: %s\n", pairAddr.Hex())
+	fmt.Printf("token0: %s\n", token0.Hex())
+	fmt.Printf("token1: %s\n", token1.Hex())
+	fmt.Printf("reserve0: %s\n", reserves.Reserve0.String())
+	fmt.Printf("reserve1: %s\n", reserves.Reserve1.String())
+	fmt.Printf("blockTimestampLast: %d\n", reserves.BlockTimestampLast)
+
+	return nil
 }
